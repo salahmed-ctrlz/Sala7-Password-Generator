@@ -21,7 +21,7 @@ const levelColor: Record<Level, string> = {
 
 function loadTheme(): Theme {
   try {
-    const saved = localStorage.getItem('sala7-theme');
+    const saved = localStorage.getItem('pwgen-theme');
     if (saved && THEMES.includes(saved as Theme)) return saved as Theme;
   } catch {
     /* storage unavailable */
@@ -65,7 +65,7 @@ function Toggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className={`flex items-center gap-3 py-1.5 ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+    <label className={`flex items-center gap-3 min-h-[2.75rem] ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
       <input
         type="checkbox"
         className="check"
@@ -88,7 +88,7 @@ function App() {
     symbols: true,
     custom: '',
   });
-  const [password, setPassword] = useState('');
+  const [generated, setGenerated] = useState<{ value: string; options: Options } | null>(null);
   const [reveal, setReveal] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -99,21 +99,30 @@ function App() {
   const customActive = parseCustom(options.custom).length > 0;
   const pool = poolSize(options);
   const canGenerate = pool >= 2;
-  const strength = useMemo(() => rate(options.length, pool), [options.length, pool]);
+  const password = generated?.value ?? '';
+  // Strength always describes the password on screen, not the sliders.
+  const strength = useMemo(
+    () => (generated ? rate(generated.options.length, poolSize(generated.options)) : rate(0, 0)),
+    [generated],
+  );
+  const hasPassword = generated !== null;
+  const dirty = generated !== null && JSON.stringify(generated.options) !== JSON.stringify(options);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      localStorage.setItem('sala7-theme', theme);
+      localStorage.setItem('pwgen-theme', theme);
     } catch {
       /* storage unavailable */
     }
   }, [theme]);
 
-  // Regenerate whenever the options change.
+  // One password on first load. After that it only changes when the user presses Generate.
   useEffect(() => {
-    setPassword(generate(options) ?? '');
-  }, [options]);
+    const value = generate(options);
+    if (value) setGenerated({ value, options });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
@@ -130,12 +139,12 @@ function App() {
     const next = generate(options);
     if (!next) return;
     setHistory((prev) =>
-      password
-        ? [{ id: nextId.current++, value: password, label: strength.label }, ...prev].slice(0, HISTORY_LIMIT)
+      generated
+        ? [{ id: nextId.current++, value: generated.value, label: strength.label }, ...prev].slice(0, HISTORY_LIMIT)
         : prev,
     );
-    setPassword(next);
-  }, [options, password, strength.label]);
+    setGenerated({ value: next, options });
+  }, [options, generated, strength.label]);
 
   const copy = async (text: string, key: string) => {
     const ok = await writeClipboard(text);
@@ -152,19 +161,19 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="w-full max-w-4xl mx-auto px-4 sm:px-6 pt-6 sm:pt-8 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <header className="w-full max-w-4xl mx-auto px-4 sm:px-6 pt-5 sm:pt-8 flex items-center justify-between gap-3">
+        <h1 className="flex items-center gap-2.5 min-w-0 text-base sm:text-lg font-semibold tracking-tight">
           <span className="w-2.5 h-2.5 rounded-full bg-accent shrink-0" aria-hidden />
-          <span className="font-semibold tracking-tight truncate">Sala7</span>
-        </div>
-        <div role="radiogroup" aria-label="Theme" className="flex rounded-md border border-line bg-surface p-0.5 text-xs">
+          <span className="truncate">Password Generator</span>
+        </h1>
+        <div role="radiogroup" aria-label="Theme" className="flex shrink-0 rounded-md border border-line bg-surface p-0.5 text-xs">
           {THEMES.map((t) => (
             <button
               key={t}
               role="radio"
               aria-checked={theme === t}
               onClick={() => setTheme(t)}
-              className={`px-2.5 py-1.5 rounded capitalize transition-colors ${
+              className={`px-2.5 py-2 sm:py-1.5 rounded capitalize transition-colors ${
                 theme === t ? 'bg-fg text-bg' : 'text-muted hover:text-fg'
               }`}
             >
@@ -174,71 +183,86 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Password generator</h1>
-        <p className="mt-2 text-sm text-muted">
-          Generated in your browser with the Web Crypto API. Nothing is stored or sent anywhere.
+      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+        <p className="text-sm text-muted max-w-xl">
+          Random passwords made in your browser with the Web Crypto API. Nothing is stored or sent anywhere.
         </p>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_320px] items-start">
+        <div className="mt-5 sm:mt-6 grid gap-5 lg:grid-cols-[1fr_320px] items-start">
           <section className="rounded-lg border border-line bg-surface p-4 sm:p-6" aria-label="Generator">
             {/* Output */}
-            <div className="flex items-stretch gap-2">
-              <output
-                aria-live="polite"
-                className="flex-1 min-w-0 rounded-md border border-line bg-bg px-3 py-3 font-mono text-base sm:text-lg break-all select-all min-h-[3.25rem] flex items-center"
-              >
-                {canGenerate ? (reveal ? password : mask(password)) : (
-                  <span className="text-sm text-muted font-sans">Enter at least 2 different characters</span>
-                )}
-              </output>
+            <output
+              aria-live="polite"
+              className="block w-full rounded-md border border-line bg-bg px-3 py-3 font-mono text-base sm:text-lg break-all select-all min-h-[3.5rem]"
+            >
+              {hasPassword ? (
+                reveal ? password : mask(password)
+              ) : (
+                <span className="text-sm text-muted font-sans">Enter at least 2 different characters</span>
+              )}
+            </output>
+
+            {/* Actions */}
+            <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
               <button
-                onClick={() => setReveal((v) => !v)}
-                aria-label={reveal ? 'Hide password' : 'Show password'}
-                aria-pressed={reveal}
-                className="px-3 rounded-md border border-line text-muted hover:text-fg transition-colors"
+                onClick={regenerate}
+                disabled={!canGenerate}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-accent text-accent-fg px-4 h-12 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40"
               >
-                {reveal ? <EyeOff size={18} /> : <Eye size={18} />}
+                <RefreshCw size={16} />
+                Generate
               </button>
               <button
                 onClick={() => copy(password, 'current')}
-                disabled={!canGenerate}
+                disabled={!hasPassword}
                 aria-label="Copy password"
-                className="px-3 rounded-md border border-line text-muted hover:text-fg transition-colors disabled:opacity-40"
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-line h-12 px-4 text-sm font-medium hover:bg-bg transition-colors disabled:opacity-40"
               >
                 {copiedId === 'current' ? <Check size={18} className="text-good" /> : <Copy size={18} />}
+                <span className="hidden sm:inline">{copiedId === 'current' ? 'Copied' : 'Copy'}</span>
+              </button>
+              <button
+                onClick={() => setReveal((v) => !v)}
+                aria-label={reveal ? 'Hide password' : 'Show password'}
+                aria-pressed={!reveal}
+                className="inline-flex items-center justify-center rounded-md border border-line h-12 w-12 text-muted hover:text-fg hover:bg-bg transition-colors"
+              >
+                {reveal ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <p className="mt-2 h-4 text-xs" role="status">
+            <p className="mt-2 min-h-[1rem] text-xs" role="status">
               {copiedId === 'current' && <span className="text-good">Copied to clipboard</span>}
-              {copyFailed && <span className="text-bad">Couldn't copy — select the text and copy manually</span>}
+              {copyFailed && <span className="text-bad">Couldn't copy — select the text and copy it manually</span>}
+              {!copiedId && !copyFailed && dirty && (
+                <span className="text-muted">Settings changed. Press Generate to apply them.</span>
+              )}
             </p>
 
             {/* Strength */}
             <div className="mt-3">
-              <div className="flex items-baseline justify-between text-sm">
-                <span className="font-medium">{canGenerate ? strength.label : '—'}</span>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
+                <span className="font-medium">{hasPassword ? strength.label : '—'}</span>
                 <span className="text-muted">
-                  {canGenerate ? `${Math.round(strength.entropy)} bits · cracked in ${strength.crackTime}` : ''}
+                  {hasPassword ? `${Math.round(strength.entropy)} bits · cracked in ${strength.crackTime}` : ''}
                 </span>
               </div>
               <div className="mt-2 h-1.5 rounded-full bg-line overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-[width] duration-200 ${levelColor[strength.level]}`}
-                  style={{ width: `${canGenerate ? strength.fill * 100 : 0}%` }}
+                  style={{ width: `${hasPassword ? strength.fill * 100 : 0}%` }}
                 />
               </div>
               <p className="mt-2 text-xs text-muted">
-                Estimate assumes 10 billion guesses per second against a fast hash.
+                Assumes 10 billion guesses per second against a fast hash.
               </p>
             </div>
 
-            <hr className="my-6 border-line" />
+            <hr className="my-5 sm:my-6 border-line" />
 
             {/* Options */}
             <div className="space-y-6">
               <div>
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between">
                   <label htmlFor="length" className="text-sm font-medium">
                     Length
                   </label>
@@ -251,16 +275,18 @@ function App() {
                   max={64}
                   value={options.length}
                   onChange={(e) => update('length', Number(e.target.value))}
-                  className="range"
+                  className="range mt-2"
                 />
               </div>
 
-              <fieldset className="grid grid-cols-2 gap-x-4">
-                <legend className="sr-only">Character types</legend>
-                <Toggle label="Lowercase (a–z)" checked={options.lower} disabled={customActive} onChange={(v) => update('lower', v)} />
-                <Toggle label="Uppercase (A–Z)" checked={options.upper} disabled={customActive} onChange={(v) => update('upper', v)} />
-                <Toggle label="Numbers (0–9)" checked={options.numbers} disabled={customActive} onChange={(v) => update('numbers', v)} />
-                <Toggle label="Symbols (!@#…)" checked={options.symbols} disabled={customActive} onChange={(v) => update('symbols', v)} />
+              <fieldset>
+                <legend className="text-sm font-medium mb-1">Include</legend>
+                <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-x-4">
+                  <Toggle label="Lowercase (a–z)" checked={options.lower} disabled={customActive} onChange={(v) => update('lower', v)} />
+                  <Toggle label="Uppercase (A–Z)" checked={options.upper} disabled={customActive} onChange={(v) => update('upper', v)} />
+                  <Toggle label="Numbers (0–9)" checked={options.numbers} disabled={customActive} onChange={(v) => update('numbers', v)} />
+                  <Toggle label="Symbols (!@#…)" checked={options.symbols} disabled={customActive} onChange={(v) => update('symbols', v)} />
+                </div>
               </fieldset>
 
               <div>
@@ -274,8 +300,10 @@ function App() {
                   onChange={(e) => update('custom', e.target.value)}
                   placeholder="e.g. abc123!"
                   autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   spellCheck={false}
-                  className="mt-2 w-full rounded-md border border-line bg-bg px-3 py-2 text-sm font-mono placeholder:text-muted/70 focus:outline-none focus:border-accent"
+                  className="mt-2 w-full h-11 rounded-md border border-line bg-bg px-3 text-base font-mono placeholder:text-muted/70 focus:outline-none focus:border-accent"
                 />
                 {customActive && (
                   <p className="mt-1.5 text-xs text-muted">
@@ -284,15 +312,6 @@ function App() {
                 )}
               </div>
             </div>
-
-            <button
-              onClick={regenerate}
-              disabled={!canGenerate}
-              className="mt-6 w-full inline-flex items-center justify-center gap-2 rounded-md bg-accent text-accent-fg px-4 py-3 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              <RefreshCw size={16} />
-              Generate new password
-            </button>
           </section>
 
           {/* History */}
@@ -300,17 +319,17 @@ function App() {
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium">Recent</h2>
               {history.length > 0 && (
-                <button onClick={() => setHistory([])} className="text-xs text-muted hover:text-fg transition-colors">
+                <button onClick={() => setHistory([])} className="px-2 py-1 -mr-2 text-xs text-muted hover:text-fg transition-colors">
                   Clear
                 </button>
               )}
             </div>
             {history.length === 0 ? (
-              <p className="mt-3 text-sm text-muted">Passwords you've replaced show up here until you leave the page.</p>
+              <p className="mt-3 text-sm text-muted">Passwords you replace show up here until you leave the page.</p>
             ) : (
-              <ul className="mt-3 divide-y divide-line">
+              <ul className="mt-2 divide-y divide-line">
                 {history.map((entry) => (
-                  <li key={entry.id} className="flex items-center gap-2 py-2.5">
+                  <li key={entry.id} className="flex items-center gap-2 py-2">
                     <div className="min-w-0 flex-1">
                       <div className="font-mono text-sm truncate">{reveal ? entry.value : mask(entry.value)}</div>
                       <div className="text-xs text-muted">{entry.label}</div>
@@ -318,7 +337,7 @@ function App() {
                     <button
                       onClick={() => copy(entry.value, `h${entry.id}`)}
                       aria-label="Copy this password"
-                      className="p-2 rounded-md text-muted hover:text-fg transition-colors"
+                      className="inline-flex items-center justify-center w-11 h-11 rounded-md text-muted hover:text-fg transition-colors"
                     >
                       {copiedId === `h${entry.id}` ? <Check size={16} className="text-good" /> : <Copy size={16} />}
                     </button>
@@ -330,15 +349,23 @@ function App() {
         </div>
       </main>
 
-      <footer className="w-full max-w-4xl mx-auto px-4 sm:px-6 pb-8 flex items-center justify-between text-sm text-muted">
-        <span>Built by Salah Eddine</span>
-        <nav className="flex gap-1" aria-label="Links">
+      <footer className="w-full max-w-4xl mx-auto px-4 sm:px-6 pb-8 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-muted">
+        <p>Built by Salah Eddine Medkour</p>
+        <nav className="flex items-center -ml-2 sm:ml-0 sm:-mr-2" aria-label="Links">
+          <a
+            href="https://salaheddinemedkour.me"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-2 h-11 inline-flex items-center rounded-md hover:text-fg transition-colors"
+          >
+            salaheddinemedkour.me
+          </a>
           <a
             href="https://github.com/salahmed-ctrlz"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="GitHub"
-            className="p-2 rounded-md hover:text-fg transition-colors"
+            className="w-11 h-11 inline-flex items-center justify-center rounded-md hover:text-fg transition-colors"
           >
             <Github size={18} />
           </a>
@@ -347,7 +374,7 @@ function App() {
             target="_blank"
             rel="noopener noreferrer"
             aria-label="LinkedIn"
-            className="p-2 rounded-md hover:text-fg transition-colors"
+            className="w-11 h-11 inline-flex items-center justify-center rounded-md hover:text-fg transition-colors"
           >
             <Linkedin size={18} />
           </a>

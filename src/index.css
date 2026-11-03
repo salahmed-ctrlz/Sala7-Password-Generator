@@ -67,14 +67,15 @@ body {
 /* Range slider */
 .range {
   @apply w-full h-1.5 rounded-full appearance-none cursor-pointer bg-line;
+  touch-action: pan-y;
   accent-color: rgb(var(--accent));
 }
 .range::-webkit-slider-thumb {
-  @apply appearance-none w-5 h-5 rounded-full border-0;
+  @apply appearance-none w-6 h-6 rounded-full border-0;
   background: rgb(var(--accent));
 }
 .range::-moz-range-thumb {
-  @apply w-5 h-5 rounded-full border-0;
+  @apply w-6 h-6 rounded-full border-0;
   background: rgb(var(--accent));
 }
 
