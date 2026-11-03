@@ -333,8 +333,8 @@ function App() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="w-full max-w-4xl mx-auto px-4 sm:px-6 pt-5 sm:pt-8 flex items-center justify-between gap-3">
+    <div className="min-h-[100dvh] flex flex-col">
+      <header className="wrap pt-5 sm:pt-8 flex items-center justify-between gap-3">
         <h1 className="flex items-center gap-2.5 min-w-0 text-base sm:text-lg font-semibold tracking-tight">
           <span className="w-2.5 h-2.5 rounded-full bg-accent shrink-0" aria-hidden />
           <span className="truncate">Password Generator</span>
@@ -356,7 +356,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+      <main className="flex-1 wrap py-6 sm:py-10">
         <p className="text-sm text-muted max-w-xl">
           Made in your browser with the Web Crypto API. Nothing is stored or sent anywhere.
         </p>
@@ -437,7 +437,7 @@ function App() {
                   style={{ width: `${strength ? strength.fill * 100 : 0}%` }}
                 />
               </div>
-              <p className="mt-2 text-xs text-muted">Assumes 10 billion guesses per second against a fast hash.</p>
+              <p className="mt-2 text-xs text-muted">Estimate assumes 10 billion guesses/second.</p>
             </div>
 
             <hr className="my-5 sm:my-6 border-line" />
@@ -524,7 +524,7 @@ function App() {
           </section>
 
           {/* History */}
-          <aside className="rounded-lg border border-line bg-surface p-4 sm:p-5" aria-label="Recent passwords">
+          <aside className="rounded-lg border border-line bg-surface p-4 sm:p-5 lg:sticky lg:top-6" aria-label="Recent passwords">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium">Recent</h2>
               {history.length > 0 && (
@@ -558,7 +558,7 @@ function App() {
         </div>
       </main>
 
-      <footer className="w-full max-w-4xl mx-auto px-4 sm:px-6 pb-8">
+      <footer className="wrap pb-8">
         <div className="border-t border-line pt-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 text-sm text-muted">
           <a
             href="https://salaheddinemedkour.me"

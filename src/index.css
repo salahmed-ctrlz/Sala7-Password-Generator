@@ -49,10 +49,32 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  overflow-x: clip;
+}
+
 html,
 body,
 #root {
   min-height: 100%;
+}
+
+body {
+  overflow-x: clip;
+}
+
+/* Page gutters that also respect notches / rounded corners. */
+.wrap {
+  @apply w-full max-w-4xl mx-auto;
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+@screen sm {
+  .wrap {
+    padding-left: max(1.5rem, env(safe-area-inset-left));
+    padding-right: max(1.5rem, env(safe-area-inset-right));
+  }
 }
 
 body {
