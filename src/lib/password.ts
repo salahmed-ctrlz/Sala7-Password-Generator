@@ -5,12 +5,16 @@ export const SETS = {
   symbols: '!@#$%^&*()_+{}[]:;<>,.?/~-=',
 } as const;
 
+const AMBIGUOUS = 'Il1O0';
+
 export interface Options {
   length: number;
   lower: boolean;
   upper: boolean;
   numbers: boolean;
   symbols: boolean;
+  /** Drop look-alike characters (I l 1 O 0) from the built-in sets. */
+  ambiguous: boolean;
   custom: string;
 }
 
@@ -38,7 +42,7 @@ export function activeGroups(o: Options): string[][] {
   if (o.upper) groups.push(SETS.upper);
   if (o.numbers) groups.push(SETS.numbers);
   if (o.symbols) groups.push(SETS.symbols);
-  return groups.map((g) => Array.from(g));
+  return groups.map((g) => Array.from(g).filter((c) => !(o.ambiguous && AMBIGUOUS.includes(c))));
 }
 
 export function poolSize(o: Options): number {
@@ -99,9 +103,8 @@ function formatDuration(seconds: number): string {
   return `${n} ${unit[0]}${n === 1 ? '' : 's'}`;
 }
 
-/** Entropy-based strength for a password drawn uniformly from `pool` symbols. */
-export function rate(length: number, pool: number): Strength {
-  const entropy = pool > 1 ? length * Math.log2(pool) : 0;
+/** Strength from a number of bits of entropy. */
+export function rateEntropy(entropy: number): Strength {
   const level: Level =
     entropy < 40 ? 'weak' : entropy < 64 ? 'fair' : entropy < 100 ? 'strong' : 'excellent';
   const label = { weak: 'Weak', fair: 'Fair', strong: 'Strong', excellent: 'Excellent' }[level];
@@ -113,4 +116,32 @@ export function rate(length: number, pool: number): Strength {
     crackTime: formatDuration(seconds),
     fill: Math.min(1, entropy / 128),
   };
+}
+
+/** Entropy of a password drawn uniformly from `pool` symbols. */
+export function passwordEntropy(length: number, pool: number): number {
+  return pool > 1 ? length * Math.log2(pool) : 0;
+}
+
+export interface PassphraseOptions {
+  words: number;
+  separator: string;
+  capitalize: boolean;
+  /** Append two random digits. */
+  digits: boolean;
+}
+
+export function generatePassphrase(list: string[], o: PassphraseOptions): { value: string; entropy: number } {
+  const picked: string[] = [];
+  for (let i = 0; i < o.words; i++) {
+    const w = list[randomInt(list.length)];
+    picked.push(o.capitalize ? w.charAt(0).toUpperCase() + w.slice(1) : w);
+  }
+  let value = picked.join(o.separator);
+  let entropy = o.words * Math.log2(list.length);
+  if (o.digits) {
+    value += o.separator + String(randomInt(100)).padStart(2, '0');
+    entropy += Math.log2(100);
+  }
+  return { value, entropy };
 }

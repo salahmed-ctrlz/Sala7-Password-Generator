@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Eye, EyeOff, Github, Linkedin, RefreshCw } from 'lucide-react';
-import { generate, parseCustom, poolSize, rate, type Level, type Options } from './lib/password';
+import { Check, Copy, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import {
+  generate,
+  generatePassphrase,
+  parseCustom,
+  passwordEntropy,
+  poolSize,
+  rateEntropy,
+  type Level,
+  type Options,
+  type PassphraseOptions,
+} from './lib/password';
 
 type Theme = 'light' | 'dark' | 'terminal';
-const THEMES: Theme[] = ['light', 'dark', 'terminal'];
-const HISTORY_LIMIT = 8;
+type Mode = 'password' | 'passphrase';
+type Settings = Options & PassphraseOptions & { mode: Mode };
+
+interface Generated {
+  value: string;
+  entropy: number;
+  settings: Settings;
+}
 
 interface HistoryEntry {
   id: number;
@@ -12,12 +28,39 @@ interface HistoryEntry {
   label: string;
 }
 
+const THEMES: Theme[] = ['light', 'dark', 'terminal'];
+const HISTORY_LIMIT = 8;
+const SEPARATORS: { label: string; value: string }[] = [
+  { label: 'Hyphen  -', value: '-' },
+  { label: 'Dot  .', value: '.' },
+  { label: 'Underscore  _', value: '_' },
+  { label: 'Space', value: ' ' },
+  { label: 'None', value: '' },
+];
+
+const DEFAULTS: Settings = {
+  mode: 'password',
+  length: 16,
+  lower: true,
+  upper: true,
+  numbers: true,
+  symbols: true,
+  ambiguous: false,
+  custom: '',
+  words: 5,
+  separator: '-',
+  capitalize: false,
+  digits: false,
+};
+
 const levelColor: Record<Level, string> = {
   weak: 'bg-bad',
   fair: 'bg-warn',
   strong: 'bg-good',
   excellent: 'bg-good',
 };
+
+/* ---------- persistence (everything except custom characters) ---------- */
 
 function loadTheme(): Theme {
   try {
@@ -28,6 +71,39 @@ function loadTheme(): Theme {
   }
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
+
+function loadSettings(): Settings {
+  try {
+    const raw = JSON.parse(localStorage.getItem('pwgen-settings') ?? 'null');
+    if (!raw || typeof raw !== 'object') return DEFAULTS;
+    const num = (v: unknown, min: number, max: number, d: number) =>
+      typeof v === 'number' && v >= min && v <= max ? Math.round(v) : d;
+    const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
+    const s: Settings = {
+      mode: raw.mode === 'passphrase' ? 'passphrase' : 'password',
+      length: num(raw.length, 8, 64, DEFAULTS.length),
+      lower: bool(raw.lower, true),
+      upper: bool(raw.upper, true),
+      numbers: bool(raw.numbers, true),
+      symbols: bool(raw.symbols, true),
+      ambiguous: bool(raw.ambiguous, false),
+      custom: '',
+      words: num(raw.words, 3, 10, DEFAULTS.words),
+      separator: SEPARATORS.some((x) => x.value === raw.separator) ? raw.separator : DEFAULTS.separator,
+      capitalize: bool(raw.capitalize, false),
+      digits: bool(raw.digits, false),
+    };
+    if (!s.lower && !s.upper && !s.numbers && !s.symbols) s.lower = true;
+    return s;
+  } catch {
+    return DEFAULTS;
+  }
+}
+
+/* ---------- helpers ---------- */
+
+let wordsPromise: Promise<string[]> | null = null;
+const loadWords = () => (wordsPromise ??= import('./lib/wordlist.json').then((m) => m.default as string[]));
 
 async function writeClipboard(text: string): Promise<boolean> {
   try {
@@ -53,13 +129,30 @@ async function writeClipboard(text: string): Promise<boolean> {
   }
 }
 
+/** The settings that actually affect the current mode, for change detection. */
+function relevant(s: Settings): string {
+  return s.mode === 'password'
+    ? JSON.stringify([s.mode, s.length, s.lower, s.upper, s.numbers, s.symbols, s.ambiguous, s.custom])
+    : JSON.stringify([s.mode, s.words, s.separator, s.capitalize, s.digits]);
+}
+
+async function make(s: Settings): Promise<{ value: string; entropy: number } | null> {
+  if (s.mode === 'passphrase') return generatePassphrase(await loadWords(), s);
+  const value = generate(s);
+  return value ? { value, entropy: passwordEntropy(s.length, poolSize(s)) } : null;
+}
+
+/* ---------- small components ---------- */
+
 function Toggle({
   label,
+  hint,
   checked,
   disabled,
   onChange,
 }: {
   label: string;
+  hint?: string;
   checked: boolean;
   disabled?: boolean;
   onChange: (v: boolean) => void;
@@ -73,22 +166,70 @@ function Toggle({
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
-      <span className="text-sm">{label}</span>
+      <span className="text-sm">
+        {label}
+        {hint && <span className="text-muted"> {hint}</span>}
+      </span>
     </label>
   );
 }
 
+function Slider({
+  id,
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <label htmlFor={id} className="text-sm font-medium">
+          {label}
+        </label>
+        <span className="font-mono text-sm tabular-nums">{value}</span>
+      </div>
+      <input
+        id={id}
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="range mt-2"
+      />
+    </div>
+  );
+}
+
+/** Digits and symbols get a tint so look-alikes (0/O, 1/l) are easy to tell apart when typing it out. */
+function Tinted({ value }: { value: string }) {
+  return (
+    <>
+      {Array.from(value).map((c, i) => (
+        <span key={i} className={/[0-9]/.test(c) ? 'text-accent' : /[^a-zA-Z0-9]/.test(c) ? 'text-warn' : undefined}>
+          {c}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/* ---------- app ---------- */
+
 function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  const [options, setOptions] = useState<Options>({
-    length: 16,
-    lower: true,
-    upper: true,
-    numbers: true,
-    symbols: true,
-    custom: '',
-  });
-  const [generated, setGenerated] = useState<{ value: string; options: Options } | null>(null);
+  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [generated, setGenerated] = useState<Generated | null>(null);
+  const [busy, setBusy] = useState(false);
   const [reveal, setReveal] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -96,17 +237,12 @@ function App() {
   const copyTimer = useRef<number>();
   const nextId = useRef(1);
 
-  const customActive = parseCustom(options.custom).length > 0;
-  const pool = poolSize(options);
-  const canGenerate = pool >= 2;
+  const isPassphrase = settings.mode === 'passphrase';
+  const customActive = parseCustom(settings.custom).length > 0;
+  const canGenerate = isPassphrase || poolSize(settings) >= 2;
   const password = generated?.value ?? '';
-  // Strength always describes the password on screen, not the sliders.
-  const strength = useMemo(
-    () => (generated ? rate(generated.options.length, poolSize(generated.options)) : rate(0, 0)),
-    [generated],
-  );
-  const hasPassword = generated !== null;
-  const dirty = generated !== null && JSON.stringify(generated.options) !== JSON.stringify(options);
+  const strength = useMemo(() => (generated ? rateEntropy(generated.entropy) : null), [generated]);
+  const dirty = generated !== null && relevant(generated.settings) !== relevant(settings);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -117,17 +253,52 @@ function App() {
     }
   }, [theme]);
 
-  // One password on first load. After that it only changes when the user presses Generate.
   useEffect(() => {
-    const value = generate(options);
-    if (value) setGenerated({ value, options });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    try {
+      localStorage.setItem('pwgen-settings', JSON.stringify({ ...settings, custom: '' }));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [settings]);
 
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
-  const update = <K extends keyof Options>(key: K, value: Options[K]) => {
-    setOptions((prev) => {
+  const regenerate = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await make(settings);
+      if (!next) return;
+      setHistory((prev) =>
+        generated && strength
+          ? [{ id: nextId.current++, value: generated.value, label: strength.label }, ...prev].slice(0, HISTORY_LIMIT)
+          : prev,
+      );
+      setGenerated({ ...next, settings });
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, settings, generated, strength]);
+
+  // One password on first load. After that it only changes when the user presses Generate.
+  useEffect(() => {
+    let live = true;
+    make(settings).then((next) => {
+      if (live && next) setGenerated({ ...next, settings });
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Start fetching the word list as soon as passphrase mode is picked.
+  useEffect(() => {
+    if (isPassphrase) void loadWords();
+  }, [isPassphrase]);
+
+  const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
+    setSettings((prev) => {
       const next = { ...prev, [key]: value };
       // Never allow every character class to be switched off.
       if (!next.lower && !next.upper && !next.numbers && !next.symbols) next.lower = true;
@@ -135,18 +306,8 @@ function App() {
     });
   };
 
-  const regenerate = useCallback(() => {
-    const next = generate(options);
-    if (!next) return;
-    setHistory((prev) =>
-      generated
-        ? [{ id: nextId.current++, value: generated.value, label: strength.label }, ...prev].slice(0, HISTORY_LIMIT)
-        : prev,
-    );
-    setGenerated({ value: next, options });
-  }, [options, generated, strength.label]);
-
   const copy = async (text: string, key: string) => {
+    if (!text) return;
     const ok = await writeClipboard(text);
     window.clearTimeout(copyTimer.current);
     setCopyFailed(!ok);
@@ -157,7 +318,19 @@ function App() {
     }, 2000);
   };
 
-  const mask = (v: string) => '•'.repeat(v.length);
+  const mask = (v: string) => '•'.repeat(Math.min(v.length, 64));
+  const modeBtn = (m: Mode, label: string) => (
+    <button
+      role="tab"
+      aria-selected={settings.mode === m}
+      onClick={() => update('mode', m)}
+      className={`flex-1 h-10 rounded text-sm font-medium transition-colors ${
+        settings.mode === m ? 'bg-bg text-fg shadow-[0_0_0_1px_rgb(var(--line))]' : 'text-muted hover:text-fg'
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -185,28 +358,40 @@ function App() {
 
       <main className="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
         <p className="text-sm text-muted max-w-xl">
-          Random passwords made in your browser with the Web Crypto API. Nothing is stored or sent anywhere.
+          Made in your browser with the Web Crypto API. Nothing is stored or sent anywhere.
         </p>
 
-        <div className="mt-5 sm:mt-6 grid gap-5 lg:grid-cols-[1fr_320px] items-start">
+        <div className="mt-5 sm:mt-6 grid gap-5 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_320px] items-start">
           <section className="rounded-lg border border-line bg-surface p-4 sm:p-6" aria-label="Generator">
-            {/* Output */}
-            <output
-              aria-live="polite"
-              className="block w-full rounded-md border border-line bg-bg px-3 py-3 font-mono text-base sm:text-lg break-all select-all min-h-[3.5rem]"
+            <div role="tablist" aria-label="Type" className="flex gap-1 rounded-md bg-line/50 p-1">
+              {modeBtn('password', 'Password')}
+              {modeBtn('passphrase', 'Passphrase')}
+            </div>
+
+            {/* Output: tap to copy */}
+            <button
+              onClick={() => copy(password, 'current')}
+              disabled={!generated}
+              aria-label="Copy password"
+              title="Click to copy"
+              className="mt-4 block w-full text-left rounded-md border border-line bg-bg px-3 py-3 font-mono text-base sm:text-lg break-all min-h-[3.5rem] hover:border-muted transition-colors"
             >
-              {hasPassword ? (
-                reveal ? password : mask(password)
+              {!generated ? (
+                <span className="text-sm text-muted font-sans">{canGenerate ? 'Generating…' : 'Enter at least 2 different characters'}</span>
+              ) : !reveal ? (
+                mask(password)
+              ) : generated.settings.mode === 'password' ? (
+                <Tinted value={password} />
               ) : (
-                <span className="text-sm text-muted font-sans">Enter at least 2 different characters</span>
+                password
               )}
-            </output>
+            </button>
 
             {/* Actions */}
             <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
               <button
                 onClick={regenerate}
-                disabled={!canGenerate}
+                disabled={!canGenerate || busy}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-accent text-accent-fg px-4 h-12 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 <RefreshCw size={16} />
@@ -214,7 +399,7 @@ function App() {
               </button>
               <button
                 onClick={() => copy(password, 'current')}
-                disabled={!hasPassword}
+                disabled={!generated}
                 aria-label="Copy password"
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-line h-12 px-4 text-sm font-medium hover:bg-bg transition-colors disabled:opacity-40"
               >
@@ -241,77 +426,101 @@ function App() {
             {/* Strength */}
             <div className="mt-3">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-sm">
-                <span className="font-medium">{hasPassword ? strength.label : '—'}</span>
+                <span className="font-medium">{strength?.label ?? '—'}</span>
                 <span className="text-muted">
-                  {hasPassword ? `${Math.round(strength.entropy)} bits · cracked in ${strength.crackTime}` : ''}
+                  {strength ? `${Math.round(strength.entropy)} bits · cracked in ${strength.crackTime}` : ''}
                 </span>
               </div>
               <div className="mt-2 h-1.5 rounded-full bg-line overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-[width] duration-200 ${levelColor[strength.level]}`}
-                  style={{ width: `${hasPassword ? strength.fill * 100 : 0}%` }}
+                  className={`h-full rounded-full transition-[width] duration-200 ${strength ? levelColor[strength.level] : ''}`}
+                  style={{ width: `${strength ? strength.fill * 100 : 0}%` }}
                 />
               </div>
-              <p className="mt-2 text-xs text-muted">
-                Assumes 10 billion guesses per second against a fast hash.
-              </p>
+              <p className="mt-2 text-xs text-muted">Assumes 10 billion guesses per second against a fast hash.</p>
             </div>
 
             <hr className="my-5 sm:my-6 border-line" />
 
             {/* Options */}
-            <div className="space-y-6">
-              <div>
-                <div className="flex items-center justify-between">
-                  <label htmlFor="length" className="text-sm font-medium">
-                    Length
+            {!isPassphrase ? (
+              <div className="space-y-6">
+                <Slider id="length" label="Length" value={settings.length} min={8} max={64} onChange={(v) => update('length', v)} />
+
+                <fieldset>
+                  <legend className="text-sm font-medium mb-1">Include</legend>
+                  <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-x-4">
+                    <Toggle label="Lowercase (a–z)" checked={settings.lower} disabled={customActive} onChange={(v) => update('lower', v)} />
+                    <Toggle label="Uppercase (A–Z)" checked={settings.upper} disabled={customActive} onChange={(v) => update('upper', v)} />
+                    <Toggle label="Numbers (0–9)" checked={settings.numbers} disabled={customActive} onChange={(v) => update('numbers', v)} />
+                    <Toggle label="Symbols (!@#…)" checked={settings.symbols} disabled={customActive} onChange={(v) => update('symbols', v)} />
+                  </div>
+                  <Toggle
+                    label="Avoid look-alikes"
+                    hint="(I l 1 O 0)"
+                    checked={settings.ambiguous}
+                    disabled={customActive}
+                    onChange={(v) => update('ambiguous', v)}
+                  />
+                </fieldset>
+
+                <div>
+                  <label htmlFor="custom" className="text-sm font-medium">
+                    Custom characters <span className="text-muted font-normal">(optional)</span>
                   </label>
-                  <span className="font-mono text-sm tabular-nums">{options.length}</span>
+                  <input
+                    id="custom"
+                    type="text"
+                    value={settings.custom}
+                    onChange={(e) => update('custom', e.target.value)}
+                    placeholder="e.g. abc123!"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="mt-2 w-full h-11 rounded-md border border-line bg-bg px-3 text-base font-mono placeholder:text-muted/70 focus:outline-none focus:border-accent"
+                  />
+                  {customActive && (
+                    <p className="mt-1.5 text-xs text-muted">
+                      Only these characters are used. Clear the field to use the options above.
+                    </p>
+                  )}
                 </div>
-                <input
-                  id="length"
-                  type="range"
-                  min={8}
-                  max={64}
-                  value={options.length}
-                  onChange={(e) => update('length', Number(e.target.value))}
-                  className="range mt-2"
-                />
               </div>
+            ) : (
+              <div className="space-y-6">
+                <Slider id="words" label="Words" value={settings.words} min={3} max={10} onChange={(v) => update('words', v)} />
 
-              <fieldset>
-                <legend className="text-sm font-medium mb-1">Include</legend>
-                <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-x-4">
-                  <Toggle label="Lowercase (a–z)" checked={options.lower} disabled={customActive} onChange={(v) => update('lower', v)} />
-                  <Toggle label="Uppercase (A–Z)" checked={options.upper} disabled={customActive} onChange={(v) => update('upper', v)} />
-                  <Toggle label="Numbers (0–9)" checked={options.numbers} disabled={customActive} onChange={(v) => update('numbers', v)} />
-                  <Toggle label="Symbols (!@#…)" checked={options.symbols} disabled={customActive} onChange={(v) => update('symbols', v)} />
+                <div>
+                  <label htmlFor="separator" className="text-sm font-medium">
+                    Separator
+                  </label>
+                  <select
+                    id="separator"
+                    value={settings.separator}
+                    onChange={(e) => update('separator', e.target.value)}
+                    className="mt-2 w-full h-11 rounded-md border border-line bg-bg px-3 text-base focus:outline-none focus:border-accent"
+                  >
+                    {SEPARATORS.map((s) => (
+                      <option key={s.label} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </fieldset>
 
-              <div>
-                <label htmlFor="custom" className="text-sm font-medium">
-                  Custom characters <span className="text-muted font-normal">(optional)</span>
-                </label>
-                <input
-                  id="custom"
-                  type="text"
-                  value={options.custom}
-                  onChange={(e) => update('custom', e.target.value)}
-                  placeholder="e.g. abc123!"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="mt-2 w-full h-11 rounded-md border border-line bg-bg px-3 text-base font-mono placeholder:text-muted/70 focus:outline-none focus:border-accent"
-                />
-                {customActive && (
-                  <p className="mt-1.5 text-xs text-muted">
-                    Only these characters are used. Clear the field to use the options above.
-                  </p>
-                )}
+                <fieldset className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-x-4">
+                  <legend className="sr-only">Extras</legend>
+                  <Toggle label="Capitalize words" checked={settings.capitalize} onChange={(v) => update('capitalize', v)} />
+                  <Toggle label="Add 2 digits" checked={settings.digits} onChange={(v) => update('digits', v)} />
+                </fieldset>
+
+                <p className="text-xs text-muted">
+                  Words are picked at random from the EFF long wordlist (7,776 words, about 12.9 bits each). Easier to
+                  remember and type than random characters, and just as strong at 6 words or more.
+                </p>
               </div>
-            </div>
+            )}
           </section>
 
           {/* History */}
@@ -349,36 +558,30 @@ function App() {
         </div>
       </main>
 
-      <footer className="w-full max-w-4xl mx-auto px-4 sm:px-6 pb-8 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-muted">
-        <p>Built by Salah Eddine Medkour</p>
-        <nav className="flex items-center -ml-2 sm:ml-0 sm:-mr-2" aria-label="Links">
+      <footer className="w-full max-w-4xl mx-auto px-4 sm:px-6 pb-8">
+        <div className="border-t border-line pt-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 text-sm text-muted">
           <a
             href="https://salaheddinemedkour.me"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-2 h-11 inline-flex items-center rounded-md hover:text-fg transition-colors"
+            className="py-2 hover:text-fg transition-colors"
           >
             salaheddinemedkour.me
           </a>
-          <a
-            href="https://github.com/salahmed-ctrlz"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="GitHub"
-            className="w-11 h-11 inline-flex items-center justify-center rounded-md hover:text-fg transition-colors"
-          >
-            <Github size={18} />
-          </a>
-          <a
-            href="https://www.linkedin.com/in/salah-eddine-medkour/"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="LinkedIn"
-            className="w-11 h-11 inline-flex items-center justify-center rounded-md hover:text-fg transition-colors"
-          >
-            <Linkedin size={18} />
-          </a>
-        </nav>
+          <nav className="flex gap-5" aria-label="Links">
+            <a href="https://github.com/salahmed-ctrlz" target="_blank" rel="noopener noreferrer" className="py-2 hover:text-fg transition-colors">
+              GitHub
+            </a>
+            <a
+              href="https://www.linkedin.com/in/salah-eddine-medkour/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-2 hover:text-fg transition-colors"
+            >
+              LinkedIn
+            </a>
+          </nav>
+        </div>
       </footer>
     </div>
   );
